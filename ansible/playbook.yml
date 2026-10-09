@@ -1,0 +1,160 @@
+---
+- name: Deploy memory-gardener
+  hosts: memory_gardener
+  become: true
+
+  tasks:
+    - name: Record the commit being deployed
+      ansible.builtin.command:
+        cmd: git describe --tags --always --dirty
+        chdir: "{{ playbook_dir }}/.."
+      register: memory_gardener_git_version
+      delegate_to: localhost
+      become: false
+      run_once: true
+      changed_when: false
+
+    - name: Build memory-gardener locally
+      ansible.builtin.command:
+        cmd: >-
+          go build -trimpath
+          -ldflags "-s -w -X main.version={{ memory_gardener_git_version.stdout }}"
+          -o {{ playbook_dir }}/../memory-gardener-{{ memory_gardener_goos }}-{{ memory_gardener_goarch }} .
+        chdir: "{{ playbook_dir }}/.."
+      environment:
+        CGO_ENABLED: "0"
+        GOOS: "{{ memory_gardener_goos }}"
+        GOARCH: "{{ memory_gardener_goarch }}"
+        GOTOOLCHAIN: "{{ memory_gardener_go_toolchain }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      changed_when: true
+
+    - name: Install git
+      ansible.builtin.package:
+        name: git
+        state: present
+
+    - name: Create group
+      ansible.builtin.group:
+        name: "{{ memory_gardener_group }}"
+        system: true
+
+    - name: Create user
+      ansible.builtin.user:
+        name: "{{ memory_gardener_user }}"
+        group: "{{ memory_gardener_group }}"
+        home: "{{ memory_gardener_data_dir }}"
+        create_home: false
+        system: true
+        shell: /usr/sbin/nologin
+
+    - name: Create data directory
+      ansible.builtin.file:
+        path: "{{ memory_gardener_data_dir }}"
+        state: directory
+        owner: "{{ memory_gardener_user }}"
+        group: "{{ memory_gardener_group }}"
+        mode: "0750"
+
+    - name: Create config directory
+      ansible.builtin.file:
+        path: "{{ memory_gardener_config_dir }}"
+        state: directory
+        owner: root
+        group: "{{ memory_gardener_group }}"
+        mode: "0750"
+
+    - name: Install binary
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../memory-gardener-{{ memory_gardener_goos }}-{{ memory_gardener_goarch }}"
+        dest: "{{ memory_gardener_binary }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install environment
+      ansible.builtin.template:
+        src: templates/memory-gardener.env.j2
+        dest: "{{ memory_gardener_config_dir }}/memory-gardener.env"
+        owner: root
+        group: "{{ memory_gardener_group }}"
+        mode: "0640"
+      no_log: true
+
+    - name: Install policy
+      ansible.builtin.copy:
+        content: "{{ memory_gardener_policy | to_nice_json }}\n"
+        dest: "{{ memory_gardener_config_dir }}/policy.json"
+        owner: root
+        group: "{{ memory_gardener_group }}"
+        mode: "0640"
+
+    - name: Install git SSH key
+      ansible.builtin.copy:
+        content: "{{ memory_gardener_ssh_private_key }}"
+        dest: "{{ memory_gardener_config_dir }}/id_git"
+        owner: "{{ memory_gardener_user }}"
+        group: "{{ memory_gardener_group }}"
+        mode: "0400"
+      when: memory_gardener_ssh_private_key | length > 0
+      no_log: true
+
+    - name: Install git SSH known hosts
+      ansible.builtin.copy:
+        content: "{{ memory_gardener_ssh_known_hosts }}"
+        dest: "{{ memory_gardener_config_dir }}/known_hosts"
+        owner: root
+        group: "{{ memory_gardener_group }}"
+        mode: "0640"
+      when: memory_gardener_ssh_known_hosts | length > 0
+
+    - name: Install systemd units
+      ansible.builtin.template:
+        src: "templates/{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - memory-gardener.service
+        - memory-gardener.timer
+      notify: Reload systemd
+
+    - name: Apply unit changes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start the timer
+      ansible.builtin.systemd:
+        name: memory-gardener.timer
+        enabled: true
+        state: started
+
+    - name: Verify the installed version
+      ansible.builtin.command:
+        cmd: "{{ memory_gardener_binary }} -version"
+      register: memory_gardener_installed_version
+      changed_when: false
+      failed_when: memory_gardener_installed_version.stdout != memory_gardener_git_version.stdout
+
+    # Reads the env file the way systemd would, then checks without the judge
+    # and without writing anything.
+    - name: Verify the configuration with a read-only run
+      ansible.builtin.command:
+        argv:
+          - sh
+          - -c
+          - >-
+            set -a; . {{ memory_gardener_config_dir }}/memory-gardener.env; set +a;
+            exec {{ memory_gardener_binary }} -no-judge
+      become_user: "{{ memory_gardener_user }}"
+      environment:
+        HOME: "{{ memory_gardener_data_dir }}"
+      changed_when: false
+      when: memory_gardener_verify_run | default(true) | bool
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true

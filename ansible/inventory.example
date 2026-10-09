@@ -1,0 +1,2 @@
+[memory_gardener]
+memory-gardener.example.com ansible_user=root

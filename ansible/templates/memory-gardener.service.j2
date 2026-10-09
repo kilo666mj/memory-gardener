@@ -1,0 +1,25 @@
+[Unit]
+Description=memory-gardener: review Wayminder memories against their sources
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{ memory_gardener_user }}
+Group={{ memory_gardener_group }}
+EnvironmentFile={{ memory_gardener_config_dir }}/memory-gardener.env
+Environment=HOME={{ memory_gardener_data_dir }}
+ExecStart={{ memory_gardener_binary }}
+TimeoutStartSec=3h
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+ReadWritePaths={{ memory_gardener_data_dir }}
+ReadOnlyPaths={{ memory_gardener_config_dir }}

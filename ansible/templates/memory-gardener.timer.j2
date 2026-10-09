@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily memory-gardener run
+
+[Timer]
+OnCalendar={{ memory_gardener_on_calendar }}
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

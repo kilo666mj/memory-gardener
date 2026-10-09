@@ -1,0 +1,15 @@
+---
+# Copy to host_vars/<inventory-hostname>.yml (gitignored), or keep it in a
+# private deploy repository. Put tokens in an Ansible Vault.
+memory_gardener_wayminder_url: "https://wayminder.example.com/mcp"
+memory_gardener_taskboard_url: "https://taskboard.example.com"
+memory_gardener_fleetglass_url: "https://fleetglass.example.com"
+memory_gardener_judge_model: "local-model"
+memory_gardener_policy:
+  repos:
+    - name: taskboard
+      url: "https://github.com/example/taskboard.git"
+  path_prefixes: ["~/code/"]
+  host_suffixes: [".example.internal"]
+  task:
+    answerers: ["user:example"]

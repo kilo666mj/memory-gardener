@@ -1,0 +1,41 @@
+---
+# Committed defaults. This repository is public: keep real hostnames,
+# addresses, tokens and the repository list in the private deploy inventory.
+memory_gardener_user: memory-gardener
+memory_gardener_group: memory-gardener
+memory_gardener_data_dir: /var/lib/memory-gardener
+memory_gardener_config_dir: /etc/memory-gardener
+memory_gardener_binary: /usr/local/bin/memory-gardener
+
+# When the daily run starts, as a systemd OnCalendar expression. Before 09:00
+# so new questions land in Taskboard's morning review.
+memory_gardener_on_calendar: "*-*-* 06:30:00"
+
+# Endpoints. The judge is any OpenAI-compatible server; it may be down, in
+# which case flagged memories wait for a later run.
+memory_gardener_wayminder_url: ""
+memory_gardener_taskboard_url: ""
+memory_gardener_fleetglass_url: ""
+memory_gardener_judge_url: "http://127.0.0.1:8080/v1"
+memory_gardener_judge_model: ""
+memory_gardener_judge_timeout: "5m"
+
+# Secrets: set these in an Ansible Vault in the deploy inventory.
+memory_gardener_wayminder_token: ""
+memory_gardener_taskboard_token: ""
+memory_gardener_fleetglass_token: ""
+memory_gardener_judge_api_key: ""
+# Optional private key for cloning private repositories over SSH.
+memory_gardener_ssh_private_key: ""
+memory_gardener_ssh_known_hosts: ""
+
+# Policy file contents; see docs/policy.md.
+memory_gardener_policy:
+  repos: []
+  path_prefixes: ["~/code/"]
+  host_suffixes: []
+
+# Built locally and copied to the host.
+memory_gardener_goos: linux
+memory_gardener_goarch: amd64
+memory_gardener_go_toolchain: go1.27.1
