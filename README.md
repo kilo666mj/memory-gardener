@@ -87,7 +87,11 @@ and set `task.answerers` in the policy to the people allowed to decide.
 ## Deploy
 
 The playbook installs the binary, a policy file, and a oneshot service with a
-daily timer. Keep real endpoints, tokens and the repository list in a private
+daily timer. By default it creates a system user and hardened system units.
+Set `memory_gardener_scope: user` to install systemd user units for the
+connecting account instead: no root is needed, and git reuses that account's
+SSH access to private repositories (enable lingering so the timer fires while
+logged out). Keep real endpoints, tokens and the repository list in a private
 inventory.
 
 ```sh

@@ -1,6 +1,10 @@
 ---
 # Committed defaults. This repository is public: keep real hostnames,
 # addresses, tokens and the repository list in the private deploy inventory.
+# system: dedicated user and hardened system units (needs root).
+# user: the connecting user's systemd user units under $HOME (no root).
+memory_gardener_scope: system
+
 memory_gardener_user: memory-gardener
 memory_gardener_group: memory-gardener
 memory_gardener_data_dir: /var/lib/memory-gardener
