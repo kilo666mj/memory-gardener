@@ -21,11 +21,27 @@ const (
 	Unsure      = "unsure"
 )
 
-// Verdict is the model's decision about one memory.
+// Confidence levels the model may report.
+const (
+	Low    = "low"
+	Medium = "medium"
+	High   = "high"
+)
+
+// Edit replaces one exact passage of a memory.
+type Edit struct {
+	Find    string `json:"find"`
+	Replace string `json:"replace"`
+}
+
+// Verdict is the model's decision about one memory. For needs_update the
+// model returns Edits; Replacement is the memory with them applied.
 type Verdict struct {
 	Verdict     string `json:"verdict"`
+	Confidence  string `json:"confidence"`
 	Reason      string `json:"reason"`
-	Replacement string `json:"replacement"`
+	Edits       []Edit `json:"edits,omitempty"`
+	Replacement string `json:"replacement,omitempty"`
 }
 
 // Request is one memory and the evidence against it.
@@ -57,25 +73,35 @@ Decide whether one memory is still accurate, using ONLY the evidence given.
 
 Verdicts:
 - still_true: the evidence does not contradict any claim in the memory.
-- needs_update: some claims are now wrong or out of date, but the memory is still useful once corrected.
+- needs_update: a specific claim is now wrong, and the evidence shows what is true instead.
 - obsolete: the memory as a whole no longer applies (the thing it describes was removed, retired or replaced) and should be forgotten.
 - unsure: the evidence is not enough to decide.
 
 Rules:
-- A changed file is not by itself a contradiction; only judge claims the evidence actually bears on.
-- Prefer unsure over guessing.
-- For needs_update, "replacement" is the complete corrected memory: keep every claim the evidence does not contradict, keep the original style and level of detail, fix only what the evidence shows, and replace the verification date with "Verified <today> by memory-gardener against <short evidence reference>". Never add secrets.
-- For every other verdict, "replacement" is "".
+- A changed or deleted file is not by itself a contradiction. Only judge claims the evidence directly bears on, and check whether the memory already describes the change.
+- Prefer unsure over guessing. Use confidence "high" only when a quoted claim is plainly contradicted by a quoted part of the evidence.
+- For needs_update, "edits" lists the smallest corrections: each "find" is copied EXACTLY, character for character, from the memory (a whole sentence or clause, unique within it), and "replace" is the corrected text for that passage ("" to delete it). Do not rewrite anything else. Never add secrets.
+- For every other verdict, "edits" is [].
 - "reason" is at most three sentences and names the evidence (commit, file, or lookup) that decided it.`
 
 var schema = json.RawMessage(`{
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict", "reason", "replacement"],
+  "required": ["verdict", "confidence", "reason", "edits"],
   "properties": {
     "verdict": {"type": "string", "enum": ["still_true", "needs_update", "obsolete", "unsure"]},
+    "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
     "reason": {"type": "string"},
-    "replacement": {"type": "string"}
+    "edits": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["find", "replace"],
+        "properties": {"find": {"type": "string"}, "replace": {"type": "string"}}
+      }
+    }
   }
 }`)
 
@@ -146,7 +172,46 @@ func (c *Client) Judge(ctx context.Context, req Request) (Verdict, error) {
 	if err := json.Unmarshal(raw, &completion); err != nil || len(completion.Choices) == 0 {
 		return Verdict{}, fmt.Errorf("judge: unexpected response: %s", truncate(string(raw), 300))
 	}
-	return parse(completion.Choices[0].Message.Content)
+	v, err := parse(completion.Choices[0].Message.Content)
+	if err != nil {
+		return Verdict{}, err
+	}
+	if v.Verdict == NeedsUpdate {
+		replacement, err := Apply(req.Content, v.Edits)
+		if err != nil {
+			// The model could not point at the claim it disputes; treat the
+			// memory as undecided rather than propose a guessed rewrite.
+			v.Verdict, v.Confidence, v.Edits = Unsure, Low, nil
+			v.Reason = strings.TrimSpace(v.Reason + " (Proposed edits did not match the memory: " + err.Error() + ")")
+			return v, nil
+		}
+		v.Replacement = replacement + fmt.Sprintf("\n\n(Corrected %s by memory-gardener review.)", req.Today.Format(time.DateOnly))
+	}
+	return v, nil
+}
+
+// Apply makes each edit to content. Every Find must occur exactly once.
+func Apply(content string, edits []Edit) (string, error) {
+	if len(edits) == 0 {
+		return "", errors.New("no edits")
+	}
+	for i, e := range edits {
+		if strings.TrimSpace(e.Find) == "" {
+			return "", fmt.Errorf("edit %d has an empty find", i+1)
+		}
+		if e.Find == e.Replace {
+			return "", fmt.Errorf("edit %d changes nothing", i+1)
+		}
+		switch n := strings.Count(content, e.Find); n {
+		case 1:
+			content = strings.Replace(content, e.Find, e.Replace, 1)
+		case 0:
+			return "", fmt.Errorf("edit %d: %q is not in the memory", i+1, truncate(e.Find, 60))
+		default:
+			return "", fmt.Errorf("edit %d: %q occurs %d times", i+1, truncate(e.Find, 60), n)
+		}
+	}
+	return content, nil
 }
 
 func parse(content string) (Verdict, error) {
@@ -162,13 +227,15 @@ func parse(content string) (Verdict, error) {
 	if err := json.Unmarshal([]byte(content), &v); err != nil {
 		return Verdict{}, fmt.Errorf("judge: verdict is not JSON: %w", err)
 	}
+	switch v.Confidence {
+	case Low, Medium, High:
+	default:
+		v.Confidence = Low
+	}
 	switch v.Verdict {
 	case StillTrue, Obsolete, Unsure:
-		v.Replacement = ""
+		v.Edits = nil
 	case NeedsUpdate:
-		if strings.TrimSpace(v.Replacement) == "" {
-			return Verdict{}, errors.New("judge: needs_update without a replacement")
-		}
 	default:
 		return Verdict{}, fmt.Errorf("judge: unknown verdict %q", v.Verdict)
 	}

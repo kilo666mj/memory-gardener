@@ -14,7 +14,10 @@ tells them when the code moves on. Once a day the gardener:
    and has a "not yet" claim aged while the repository kept moving?
 3. **Judges what looks doubtful.** A local OpenAI-compatible model reads the
    memory alongside the commits and diffs and returns `still_true`,
-   `needs_update` (with complete corrected text), `obsolete` or `unsure`.
+   `needs_update`, `obsolete` or `unsure`, with a confidence. An update is a
+   list of exact find-and-replace edits, not a rewrite: each edit must quote
+   text that occurs exactly once in the memory, or the verdict becomes
+   `unsure`. Small models cannot then lose the parts they did not touch.
 4. **Asks a person.** Each proposed change becomes one Taskboard task with a
    blocking question: *Apply replacement*, *Forget memory*, *Keep unchanged*,
    or your own wording. It writes nothing to Wayminder without an answer.
@@ -53,6 +56,25 @@ memory-gardener -dry-run      # also asks the model; writes nothing
 memory-gardener               # the real run
 memory-gardener -json         # machine-readable report
 ```
+
+### Judge model
+
+Any OpenAI-compatible server with JSON-schema output works. With Ollama, make
+sure the context window fits the evidence (up to about 8,000 tokens): Ollama's
+OpenAI endpoint cannot set it per request, and its default silently truncates.
+An alias shares the weights:
+
+```sh
+printf 'FROM qwen3:8b\nPARAMETER num_ctx 24576\nPARAMETER temperature 0\n' > Modelfile
+ollama create qwen3:8b-gardener -f Modelfile
+MEMORY_GARDENER_JUDGE_URL=http://127.0.0.1:11434/v1 MEMORY_GARDENER_JUDGE_MODEL=qwen3:8b-gardener memory-gardener -dry-run
+```
+
+`qwen3:8b` takes about a minute per memory on a 16 GB consumer GPU. Its
+confidence ratings are optimistic, which is why only `high` reaches people by
+default and every change still needs an answer.
+
+### Wayminder client
 
 Give the gardener its own Wayminder client: Wayminder rate-limits per client,
 and a shared token would spend your interactive agents' budget. The gardener

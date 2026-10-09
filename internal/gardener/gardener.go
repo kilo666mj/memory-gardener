@@ -181,6 +181,10 @@ func (g *Gardener) Run(ctx context.Context) (Report, error) {
 		}
 		f.Verdict = &v
 		fp := c.result.Fingerprint()
+		if (v.Verdict == judge.NeedsUpdate || v.Verdict == judge.Obsolete) && !confident(v.Confidence, g.Policy.MinConfidence) {
+			v.Reason = strings.TrimSpace(fmt.Sprintf("%s (%s, %s confidence; below the %s needed to ask.)", v.Reason, strings.ReplaceAll(v.Verdict, "_", " "), v.Confidence, g.Policy.MinConfidence))
+			v.Verdict, v.Edits, v.Replacement = judge.Unsure, nil, ""
+		}
 		switch v.Verdict {
 		case judge.StillTrue, judge.Unsure:
 			if v.Verdict == judge.StillTrue {
@@ -423,6 +427,15 @@ func (g *Gardener) now() time.Time {
 		return g.Now()
 	}
 	return time.Now()
+}
+
+// confident reports whether got meets min; an unset min means high.
+func confident(got, min string) bool {
+	rank := map[string]int{judge.Low: 1, judge.Medium: 2, judge.High: 3}
+	if rank[min] == 0 {
+		min = judge.High
+	}
+	return rank[got] >= rank[min]
 }
 
 func label(m wayminder.Memory) string {

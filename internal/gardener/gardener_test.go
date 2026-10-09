@@ -215,7 +215,7 @@ func (h *harness) run(t *testing.T) Report {
 
 func TestProposeThenApplyApprovedReplacement(t *testing.T) {
 	h := newHarness(mem("A", "Callers use old.internal:11434."), mem("B", "Nothing checkable here."))
-	h.judge.verdicts["A"] = judge.Verdict{Verdict: judge.NeedsUpdate, Reason: "old.internal no longer resolves", Replacement: "Callers use new.internal:11434."}
+	h.judge.verdicts["A"] = judge.Verdict{Confidence: judge.High, Verdict: judge.NeedsUpdate, Reason: "old.internal no longer resolves", Replacement: "Callers use new.internal:11434."}
 
 	rep := h.run(t)
 	if rep.Memories != 2 || rep.Checkable != 1 || rep.Flagged != 1 || rep.Proposed != 1 || rep.OpenReviews != 1 {
@@ -261,9 +261,9 @@ func TestProposeThenApplyApprovedReplacement(t *testing.T) {
 func TestOwnWordingAndKeepAndForget(t *testing.T) {
 	h := newHarness(mem("A", "a uses x.internal"), mem("B", "b uses y.internal"), mem("C", "c uses z.internal"))
 	for _, id := range []string{"A", "B"} {
-		h.judge.verdicts[id] = judge.Verdict{Verdict: judge.NeedsUpdate, Reason: "r", Replacement: "proposed " + id}
+		h.judge.verdicts[id] = judge.Verdict{Confidence: judge.High, Verdict: judge.NeedsUpdate, Reason: "r", Replacement: "proposed " + id}
 	}
-	h.judge.verdicts["C"] = judge.Verdict{Verdict: judge.Obsolete, Reason: "retired"}
+	h.judge.verdicts["C"] = judge.Verdict{Confidence: judge.High, Verdict: judge.Obsolete, Reason: "retired"}
 	h.run(t)
 
 	if opts := h.tasks.questions[h.st.Proposals["C"].TaskID].Options; len(opts) != 2 || opts[0] != OptionForget {
@@ -297,7 +297,7 @@ func TestOwnWordingAndKeepAndForget(t *testing.T) {
 
 func TestMemoryChangedElsewhereClosesQuietly(t *testing.T) {
 	h := newHarness(mem("A", "uses x.internal"))
-	h.judge.verdicts["A"] = judge.Verdict{Verdict: judge.NeedsUpdate, Reason: "r", Replacement: "new"}
+	h.judge.verdicts["A"] = judge.Verdict{Confidence: judge.High, Verdict: judge.NeedsUpdate, Reason: "r", Replacement: "new"}
 	h.run(t)
 	taskID := h.st.Proposals["A"].TaskID
 
@@ -332,7 +332,7 @@ func TestStillTrueIsRememberedAndJudgeOutageDefers(t *testing.T) {
 
 func TestDryRunWritesNothing(t *testing.T) {
 	h := newHarness(mem("A", "uses x.internal"))
-	h.judge.verdicts["A"] = judge.Verdict{Verdict: judge.NeedsUpdate, Reason: "r", Replacement: "new"}
+	h.judge.verdicts["A"] = judge.Verdict{Confidence: judge.High, Verdict: judge.NeedsUpdate, Reason: "r", Replacement: "new"}
 	h.g.DryRun = true
 	rep := h.run(t)
 	if rep.Proposed != 1 || len(h.tasks.tasks) != 0 || len(h.st.Proposals) != 0 || len(h.st.Reviews) != 0 {
@@ -343,7 +343,7 @@ func TestDryRunWritesNothing(t *testing.T) {
 func TestOpenProposalCap(t *testing.T) {
 	h := newHarness(mem("A", "uses a.internal"), mem("B", "uses b.internal"), mem("C", "uses c.internal"))
 	for _, id := range []string{"A", "B", "C"} {
-		h.judge.verdicts[id] = judge.Verdict{Verdict: judge.Obsolete, Reason: "r"}
+		h.judge.verdicts[id] = judge.Verdict{Confidence: judge.High, Verdict: judge.Obsolete, Reason: "r"}
 	}
 	h.g.Policy.MaxOpenProposals = 2
 	rep := h.run(t)
@@ -365,5 +365,20 @@ func TestChunkAndClip(t *testing.T) {
 	}
 	if c := clip(s, 10); len(c) > 10 || !strings.HasSuffix(c, "…") {
 		t.Errorf("clip = %q", c)
+	}
+}
+
+func TestLowConfidenceIsNotAsked(t *testing.T) {
+	h := newHarness(mem("A", "uses x.internal"))
+	h.judge.verdicts["A"] = judge.Verdict{Verdict: judge.NeedsUpdate, Confidence: judge.Medium, Reason: "maybe", Replacement: "new"}
+	rep := h.run(t)
+	if rep.Proposed != 0 || rep.Unsure != 1 || len(h.tasks.tasks) != 0 || h.st.Reviews["A"].Outcome != "judged_unsure" {
+		t.Fatalf("report=%+v reviews=%+v", rep, h.st.Reviews)
+	}
+	h2 := newHarness(mem("A", "uses x.internal"))
+	h2.judge.verdicts["A"] = judge.Verdict{Verdict: judge.NeedsUpdate, Confidence: judge.Medium, Reason: "maybe", Replacement: "new"}
+	h2.g.Policy.MinConfidence = judge.Medium
+	if rep := h2.run(t); rep.Proposed != 1 {
+		t.Fatalf("medium threshold not honoured: %+v", rep)
 	}
 }

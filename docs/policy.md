@@ -16,6 +16,7 @@ rejected.
   "transient_phrases": ["not yet", "no remote yet"],
   "transient_age_days": 7,
   "max_judgements_per_run": 20,
+  "min_confidence": "high",
   "max_open_proposals": 10,
   "task": {
     "project": "memory-gardener",
@@ -35,6 +36,7 @@ rejected.
 | `transient_phrases` | Phrases that make a claim temporary | `not yet`, `no remote yet`, `not diagnosed`, `work in progress`, `for now`, `temporarily` |
 | `transient_age_days` | Age after which a temporary claim is checked against later commits | 7 |
 | `max_judgements_per_run` | Model calls per run; the rest wait | 20 |
+| `min_confidence` | Lowest model confidence (`low`, `medium`, `high`) that becomes a question; weaker verdicts count as unsure | `high` |
 | `max_open_proposals` | Review tasks waiting on people at once; no new ones beyond this | 10 |
 | `task.answerers` | Taskboard person principals who may answer | anyone with access |
 

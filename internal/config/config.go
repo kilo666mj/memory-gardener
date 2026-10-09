@@ -53,6 +53,9 @@ type Policy struct {
 	TransientAgeDays int      `json:"transient_age_days"`
 
 	MaxJudgementsPerRun int `json:"max_judgements_per_run"`
+	// MinConfidence is the lowest model confidence (low, medium, high) that
+	// may turn into a question for a person.
+	MinConfidence string `json:"min_confidence"`
 	// MaxOpenProposals caps how many review tasks may wait on a person at once.
 	MaxOpenProposals int `json:"max_open_proposals"`
 
@@ -155,6 +158,13 @@ func (p *Policy) normalize() error {
 	}
 	if p.MaxJudgementsPerRun <= 0 {
 		p.MaxJudgementsPerRun = 20
+	}
+	switch p.MinConfidence {
+	case "":
+		p.MinConfidence = "high"
+	case "low", "medium", "high":
+	default:
+		return fmt.Errorf("policy min_confidence: %q is not low, medium or high", p.MinConfidence)
 	}
 	if p.MaxOpenProposals <= 0 {
 		p.MaxOpenProposals = 10
