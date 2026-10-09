@@ -2,6 +2,7 @@ package gardener
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -89,7 +90,7 @@ func (f *fakeTasks) Note(_ context.Context, taskID, _, body, _ string) error {
 func (f *fakeTasks) Escalate(_ context.Context, taskID string, req taskboard.EscalationRequest) (taskboard.Escalation, error) {
 	t := f.tasks[taskID]
 	if req.ExpectedVersion != t.Version {
-		return taskboard.Escalation{}, &taskboard.StatusError{Status: 409, Body: "version conflict"}
+		return taskboard.Escalation{}, errors.New("version conflict")
 	}
 	e := &taskboard.Escalation{ID: f.id("E"), Status: "open"}
 	f.escs[taskID] = e
@@ -117,7 +118,7 @@ func (f *fakeTasks) answer(taskID, text string) {
 func (f *fakeTasks) Get(_ context.Context, id string) (taskboard.Task, error) {
 	t, ok := f.tasks[id]
 	if !ok {
-		return taskboard.Task{}, &taskboard.StatusError{Status: 404}
+		return taskboard.Task{}, taskboard.ErrNotFound
 	}
 	return *t, nil
 }
@@ -136,7 +137,7 @@ func (f *fakeTasks) Messages(_ context.Context, id string) ([]taskboard.Message,
 func (f *fakeTasks) Claim(_ context.Context, id string, version int64) (taskboard.Task, taskboard.Run, error) {
 	t := f.tasks[id]
 	if t.Version != version || (t.Status != "queued" && t.Status != "stale") {
-		return taskboard.Task{}, taskboard.Run{}, &taskboard.StatusError{Status: 409}
+		return taskboard.Task{}, taskboard.Run{}, errors.New("version conflict")
 	}
 	t.Status = "active"
 	t.Version++
@@ -146,7 +147,7 @@ func (f *fakeTasks) Claim(_ context.Context, id string, version int64) (taskboar
 func (f *fakeTasks) Complete(_ context.Context, task taskboard.Task, _, note string) error {
 	t := f.tasks[task.ID]
 	if t.Version != task.Version {
-		return &taskboard.StatusError{Status: 409}
+		return errors.New("version conflict")
 	}
 	t.Status = "done"
 	f.completed[task.ID] = note

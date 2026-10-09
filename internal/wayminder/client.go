@@ -6,14 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"sort"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/kilo666mj/memory-gardener/internal/mcpclient"
 )
 
 // Memory mirrors the fields of Wayminder's memory the gardener uses.
@@ -32,20 +29,20 @@ type Memory struct {
 
 // Client is a connected Wayminder MCP session.
 type Client struct {
-	session *mcp.ClientSession
+	session *mcpclient.Session
 }
 
 // Dial connects to a Wayminder Streamable HTTP endpoint with a bearer token.
+// Wayminder rate-limits per client (120 a minute by default), so requests are
+// spaced out.
 func Dial(ctx context.Context, endpoint, token, version string) (*Client, error) {
-	httpClient := &http.Client{
-		Timeout:   2 * time.Minute,
-		Transport: &bearer{token: token, base: http.DefaultTransport, interval: 600 * time.Millisecond, maxWait: time.Minute},
-	}
-	transport := &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: httpClient, DisableStandaloneSSE: true}
-	client := mcp.NewClient(&mcp.Implementation{Name: "memory-gardener", Version: version}, nil)
-	session, err := client.Connect(ctx, transport, nil)
+	session, err := mcpclient.Dial(ctx, "wayminder", mcpclient.Options{
+		Endpoint: endpoint, Token: token, Version: version,
+		Headers:  map[string]string{"X-Wayminder-Source": "memory-gardener"},
+		Interval: 600 * time.Millisecond,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("connect to wayminder: %w", err)
+		return nil, err
 	}
 	return &Client{session: session}, nil
 }
@@ -120,97 +117,10 @@ func (c *Client) Forget(ctx context.Context, id string) error {
 }
 
 func (c *Client) call(ctx context.Context, tool string, args map[string]any, out any) error {
-	res, err := c.session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
-	if err != nil {
-		return fmt.Errorf("wayminder %s: %w", tool, err)
+	err := c.session.Call(ctx, tool, args, out)
+	var te *mcpclient.ToolError
+	if errors.As(err, &te) && strings.Contains(strings.ToLower(te.Message), "not found") {
+		return fmt.Errorf("%w: %w", ErrNotLive, err)
 	}
-	if res.IsError {
-		msg := toolText(res)
-		if strings.Contains(strings.ToLower(msg), "not found") {
-			return fmt.Errorf("wayminder %s: %w: %s", tool, ErrNotLive, msg)
-		}
-		return fmt.Errorf("wayminder %s: %s", tool, msg)
-	}
-	raw, err := json.Marshal(res.StructuredContent)
-	if err != nil {
-		return fmt.Errorf("wayminder %s: encode result: %w", tool, err)
-	}
-	if res.StructuredContent == nil {
-		raw = []byte(toolText(res))
-	}
-	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("wayminder %s: decode result: %w", tool, err)
-	}
-	return nil
-}
-
-func toolText(res *mcp.CallToolResult) string {
-	var parts []string
-	for _, c := range res.Content {
-		if t, ok := c.(*mcp.TextContent); ok {
-			parts = append(parts, t.Text)
-		}
-	}
-	return strings.Join(parts, "\n")
-}
-
-// bearer authenticates requests and stays inside Wayminder's per-client rate
-// limit (120 a minute by default): it spaces requests out and waits out a 429.
-type bearer struct {
-	token    string
-	base     http.RoundTripper
-	interval time.Duration
-	maxWait  time.Duration
-
-	mu   sync.Mutex
-	next time.Time
-}
-
-func (b *bearer) RoundTrip(r *http.Request) (*http.Response, error) {
-	for attempt := 0; ; attempt++ {
-		if err := b.pace(r.Context()); err != nil {
-			return nil, err
-		}
-		req := r.Clone(r.Context())
-		if r.Body != nil && r.GetBody != nil {
-			body, err := r.GetBody()
-			if err != nil {
-				return nil, err
-			}
-			req.Body = body
-		}
-		req.Header.Set("Authorization", "Bearer "+b.token)
-		req.Header.Set("X-Wayminder-Source", "memory-gardener")
-		resp, err := b.base.RoundTrip(req)
-		if err != nil || resp.StatusCode != http.StatusTooManyRequests || attempt == 3 || (r.Body != nil && r.GetBody == nil) {
-			return resp, err
-		}
-		wait := b.maxWait
-		if secs, perr := strconv.Atoi(resp.Header.Get("Retry-After")); perr == nil && time.Duration(secs)*time.Second < wait {
-			wait = time.Duration(secs) * time.Second
-		}
-		_ = resp.Body.Close()
-		select {
-		case <-r.Context().Done():
-			return nil, r.Context().Err()
-		case <-time.After(wait):
-		}
-	}
-}
-
-func (b *bearer) pace(ctx context.Context) error {
-	b.mu.Lock()
-	now := time.Now()
-	at := b.next
-	if at.Before(now) {
-		at = now
-	}
-	b.next = at.Add(b.interval)
-	b.mu.Unlock()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(time.Until(at)):
-		return nil
-	}
+	return err
 }

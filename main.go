@@ -24,6 +24,7 @@ import (
 	"github.com/kilo666mj/memory-gardener/internal/gardener"
 	"github.com/kilo666mj/memory-gardener/internal/gitrepo"
 	"github.com/kilo666mj/memory-gardener/internal/judge"
+	"github.com/kilo666mj/memory-gardener/internal/mcpclient"
 	"github.com/kilo666mj/memory-gardener/internal/state"
 	"github.com/kilo666mj/memory-gardener/internal/taskboard"
 	"github.com/kilo666mj/memory-gardener/internal/wayminder"
@@ -78,6 +79,22 @@ func run(args []string) (err error) {
 		}
 	}()
 
+	var tasks gardener.Tasks = &taskboard.Client{SessionKey: "memory-gardener@" + cfg.FleetglassHost}
+	if !*dryRun {
+		tb, err := mcpclient.Dial(ctx, "taskboard", mcpclient.Options{
+			Endpoint: cfg.TaskboardURL + "/mcp", Token: cfg.TaskboardToken, Version: version,
+		})
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if cerr := tb.Close(); cerr != nil && err == nil {
+				logger.Warn("close taskboard session", "error", cerr)
+			}
+		}()
+		tasks = &taskboard.Client{MCP: tb, SessionKey: "memory-gardener@" + cfg.FleetglassHost}
+	}
+
 	repos := map[string]check.Repo{}
 	for _, r := range cfg.Policy.Repos {
 		m, err := gitrepo.Sync(ctx, filepath.Join(cfg.DataDir, "mirrors", r.Name+".git"), r.URL)
@@ -104,7 +121,7 @@ func run(args []string) (err error) {
 	}
 	g := &gardener.Gardener{
 		Memories: mem,
-		Tasks:    &taskboard.Client{BaseURL: cfg.TaskboardURL, Token: cfg.TaskboardToken, SessionKey: "memory-gardener@" + cfg.FleetglassHost},
+		Tasks:    tasks,
 		Judge:    j,
 		Checks:   &fleetglass.Client{BaseURL: cfg.FleetglassURL, Token: cfg.FleetglassToken},
 		Checker: &check.Checker{

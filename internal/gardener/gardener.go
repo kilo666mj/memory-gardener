@@ -316,8 +316,7 @@ func (g *Gardener) reconcile(ctx context.Context, rep *Report) {
 
 func (g *Gardener) reconcileOne(ctx context.Context, p state.Proposal, rep *Report) error {
 	task, err := g.Tasks.Get(ctx, p.TaskID)
-	var se *taskboard.StatusError
-	if errors.As(err, &se) && se.Status == 404 {
+	if errors.Is(err, taskboard.ErrNotFound) {
 		g.close(p, "task_missing")
 		return nil
 	}

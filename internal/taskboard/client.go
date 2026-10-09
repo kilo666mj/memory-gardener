@@ -1,18 +1,15 @@
-// Package taskboard is a small REST client for the Taskboard calls the
-// gardener makes: start a review task, ask its question, read the answer,
-// and close the task.
+// Package taskboard calls the Taskboard MCP tools the gardener needs: start a
+// review task, ask its question, read the answer, and close the task.
+// Taskboard accepts agent bearer tokens only on its MCP endpoint; the REST API
+// is for browser sessions.
 package taskboard
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"net/url"
+	"errors"
 	"strings"
-	"time"
+
+	"github.com/kilo666mj/memory-gardener/internal/mcpclient"
 )
 
 // Task is the subset of a Taskboard task the gardener reads.
@@ -80,12 +77,18 @@ type EscalationRequest struct {
 	IdempotencyKey  string   `json:"idempotency_key,omitempty"`
 }
 
-// Client calls the Taskboard REST API.
+// ErrNotFound reports a task that does not exist or is not visible.
+var ErrNotFound = errors.New("task not found")
+
+// Caller calls one MCP tool; *mcpclient.Session implements it.
+type Caller interface {
+	Call(ctx context.Context, tool string, args, out any) error
+}
+
+// Client calls Taskboard's MCP tools.
 type Client struct {
-	BaseURL    string
-	Token      string
+	MCP        Caller
 	SessionKey string
-	HTTP       *http.Client
 }
 
 const agentName = "memory-gardener"
@@ -99,14 +102,14 @@ func (c *Client) Start(ctx context.Context, req StartRequest) (Task, Run, error)
 		Task Task `json:"task"`
 		Run  Run  `json:"run"`
 	}
-	err := c.do(ctx, http.MethodPost, "/api/v1/tasks", req, &out)
+	err := c.call(ctx, "task_start", req, &out)
 	return out.Task, out.Run, err
 }
 
 // Note adds a note message from an active run.
 func (c *Client) Note(ctx context.Context, taskID, runID, body, key string) error {
-	return c.do(ctx, http.MethodPost, "/api/v1/tasks/"+url.PathEscape(taskID)+"/messages", map[string]any{
-		"author_run_id": runID, "kind": "note", "body": body, "idempotency_key": key,
+	return c.call(ctx, "task_message_add", map[string]any{
+		"task_id": taskID, "author_run_id": runID, "kind": "note", "body": body, "idempotency_key": key,
 	}, nil)
 }
 
@@ -116,7 +119,10 @@ func (c *Client) Escalate(ctx context.Context, taskID string, req EscalationRequ
 	var out struct {
 		Escalation Escalation `json:"escalation"`
 	}
-	err := c.do(ctx, http.MethodPost, "/api/v1/tasks/"+url.PathEscape(taskID)+"/escalations", req, &out)
+	err := c.call(ctx, "task_escalate", struct {
+		TaskID string `json:"task_id"`
+		EscalationRequest
+	}{taskID, req}, &out)
 	return out.Escalation, err
 }
 
@@ -125,7 +131,7 @@ func (c *Client) Get(ctx context.Context, taskID string) (Task, error) {
 	var out struct {
 		Task Task `json:"task"`
 	}
-	err := c.do(ctx, http.MethodGet, "/api/v1/tasks/"+url.PathEscape(taskID), nil, &out)
+	err := c.call(ctx, "task_get", map[string]any{"task_id": taskID}, &out)
 	return out.Task, err
 }
 
@@ -134,7 +140,7 @@ func (c *Client) Escalations(ctx context.Context, taskID string) ([]Escalation, 
 	var out struct {
 		Escalations []Escalation `json:"escalations"`
 	}
-	err := c.do(ctx, http.MethodGet, "/api/v1/tasks/"+url.PathEscape(taskID)+"/escalations", nil, &out)
+	err := c.call(ctx, "task_escalation_list", map[string]any{"task_id": taskID}, &out)
 	return out.Escalations, err
 }
 
@@ -143,7 +149,7 @@ func (c *Client) Messages(ctx context.Context, taskID string) ([]Message, error)
 	var out struct {
 		Messages []Message `json:"messages"`
 	}
-	err := c.do(ctx, http.MethodGet, "/api/v1/tasks/"+url.PathEscape(taskID)+"/messages", nil, &out)
+	err := c.call(ctx, "task_message_list", map[string]any{"task_id": taskID, "limit": 200}, &out)
 	return out.Messages, err
 }
 
@@ -153,74 +159,32 @@ func (c *Client) Claim(ctx context.Context, taskID string, version int64) (Task,
 		Task Task `json:"task"`
 		Run  Run  `json:"run"`
 	}
-	err := c.do(ctx, http.MethodPost, "/api/v1/tasks/"+url.PathEscape(taskID)+"/runs", map[string]any{
-		"expected_version": version, "agent": agentName, "client": agentName, "agent_session_key": c.SessionKey,
+	err := c.call(ctx, "task_claim", map[string]any{
+		"task_id": taskID, "expected_version": version,
+		"agent": agentName, "client": agentName, "agent_session_key": c.SessionKey,
 	}, &out)
 	return out.Task, out.Run, err
 }
 
 // Complete marks every open item done and finishes the task with a note.
 func (c *Client) Complete(ctx context.Context, task Task, runID, note string) error {
-	var open []string
+	open := []string{}
 	for _, item := range task.Items {
 		if item.Status != "done" && item.Status != "skipped" {
 			open = append(open, item.ID)
 		}
 	}
-	return c.do(ctx, http.MethodPatch, "/api/v1/tasks/"+url.PathEscape(task.ID), map[string]any{
-		"expected_version": task.Version, "run_id": runID, "status": "done",
+	return c.call(ctx, "task_complete", map[string]any{
+		"task_id": task.ID, "expected_version": task.Version, "run_id": runID,
 		"complete_item_ids": open, "current_note": note,
 	}, nil)
 }
 
-// StatusError is a non-2xx response.
-type StatusError struct {
-	Status int
-	Body   string
-}
-
-func (e *StatusError) Error() string {
-	return fmt.Sprintf("taskboard: status %d: %s", e.Status, e.Body)
-}
-
-func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
-	var body io.Reader
-	if in != nil {
-		raw, err := json.Marshal(in)
-		if err != nil {
-			return err
-		}
-		body = bytes.NewReader(raw)
+func (c *Client) call(ctx context.Context, tool string, args, out any) error {
+	err := c.MCP.Call(ctx, tool, args, out)
+	var te *mcpclient.ToolError
+	if errors.As(err, &te) && strings.Contains(strings.ToLower(te.Message), "not found") {
+		return errors.Join(ErrNotFound, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	client := c.HTTP
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("taskboard %s %s: %w", method, path, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode/100 != 2 {
-		return &StatusError{Status: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
-	}
-	if out == nil || len(raw) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("taskboard %s %s: decode: %w", method, path, err)
-	}
-	return nil
+	return err
 }

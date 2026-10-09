@@ -44,7 +44,7 @@ Every setting is an environment variable; the policy is a JSON file
 | Variable | Purpose |
 | --- | --- |
 | `MEMORY_GARDENER_WAYMINDER_URL`, `_TOKEN` | Wayminder MCP endpoint and a registered client token (required) |
-| `MEMORY_GARDENER_TASKBOARD_URL`, `_TOKEN` | Taskboard base URL and an agent credential (required unless `-dry-run`) |
+| `MEMORY_GARDENER_TASKBOARD_URL`, `_TOKEN` | Taskboard base URL (its `/mcp` endpoint is used; agent tokens are not accepted on the REST API) and an agent credential (required unless `-dry-run`) |
 | `MEMORY_GARDENER_JUDGE_URL`, `_MODEL`, `_API_KEY`, `_TIMEOUT` | OpenAI-compatible endpoint (default `http://127.0.0.1:8080/v1`) |
 | `MEMORY_GARDENER_FLEETGLASS_URL`, `_TOKEN`, `_HOST` | Optional Fleetglass ingest |
 | `MEMORY_GARDENER_POLICY` | Policy file (default `/etc/memory-gardener/policy.json`) |
