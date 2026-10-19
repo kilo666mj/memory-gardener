@@ -242,7 +242,8 @@ func (g *Gardener) Publish(ctx context.Context, rep Report, runErr error) error 
 
 func (g *Gardener) propose(ctx context.Context, m wayminder.Memory, res check.Result, v judge.Verdict, fp string) (string, error) {
 	key := "memory-gardener-" + m.ID + "-" + fp
-	summary := fmt.Sprintf("Memory-gardener judged memory %s (%s) %s: %s", m.ID, m.Scope, strings.ReplaceAll(v.Verdict, "_", " "), v.Reason)
+	action := suggestedAction(m.ID, v)
+	summary := fmt.Sprintf("Memory-gardener judged memory %s (%s) %s: %s\n\n%s", m.ID, m.Scope, strings.ReplaceAll(v.Verdict, "_", " "), v.Reason, action)
 	task, run, err := g.Tasks.Start(ctx, taskboard.StartRequest{
 		Title:     clip("Review memory: "+label(m), 200),
 		Type:      "work",
@@ -271,13 +272,13 @@ func (g *Gardener) propose(ctx context.Context, m wayminder.Memory, res check.Re
 
 	options := []string{OptionApply, OptionForget, OptionKeep}
 	recommendation := OptionApply
-	question := fmt.Sprintf("Memory %s looks out of date: %s\n\nThe current text and a proposed replacement are in this task's notes. Choose %q, %q or %q, or answer with the complete text you want stored instead.",
-		m.ID, v.Reason, OptionApply, OptionForget, OptionKeep)
+	question := fmt.Sprintf("Memory %s looks out of date: %s\n\n%s\n\nThe current text and a proposed replacement are in this task's notes. Choose %q, %q or %q, or answer with the complete text you want stored instead.",
+		m.ID, v.Reason, action, OptionApply, OptionForget, OptionKeep)
 	if v.Verdict == judge.Obsolete {
 		options = []string{OptionForget, OptionKeep}
 		recommendation = OptionForget
-		question = fmt.Sprintf("Memory %s looks obsolete: %s\n\nThe current text is in this task's notes. Choose %q or %q, or answer with the complete text you want stored instead.",
-			m.ID, v.Reason, OptionForget, OptionKeep)
+		question = fmt.Sprintf("Memory %s looks obsolete: %s\n\n%s\n\nThe current text is in this task's notes. Choose %q or %q, or answer with the complete text you want stored instead.",
+			m.ID, v.Reason, action, OptionForget, OptionKeep)
 	}
 	current, err := g.Tasks.Get(ctx, task.ID)
 	if err != nil {
@@ -297,6 +298,27 @@ func (g *Gardener) propose(ctx context.Context, m wayminder.Memory, res check.Re
 	}
 	g.Log.Info("asked for review", "memory", m.ID, "task", task.ID, "verdict", v.Verdict)
 	return task.ID, nil
+}
+
+// suggestedAction says what the gardener will do in Wayminder if the
+// recommended option is chosen.
+func suggestedAction(id string, v judge.Verdict) string {
+	if v.Verdict == judge.Obsolete {
+		return fmt.Sprintf("Suggested action: forget memory %s in Wayminder.", id)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Suggested action: supersede memory %s in Wayminder with the proposed replacement.", id)
+	if len(v.Edits) > 0 {
+		b.WriteString(" It makes these edits:")
+	}
+	for _, e := range v.Edits {
+		if e.Replace == "" {
+			fmt.Fprintf(&b, "\n- delete %q", e.Find)
+		} else {
+			fmt.Fprintf(&b, "\n- %q → %q", e.Find, e.Replace)
+		}
+	}
+	return b.String()
 }
 
 // reconcile applies answered reviews and forgets closed ones.

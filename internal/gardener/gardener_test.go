@@ -216,7 +216,8 @@ func (h *harness) run(t *testing.T) Report {
 
 func TestProposeThenApplyApprovedReplacement(t *testing.T) {
 	h := newHarness(mem("A", "Callers use old.internal:11434."), mem("B", "Nothing checkable here."))
-	h.judge.verdicts["A"] = judge.Verdict{Confidence: judge.High, Verdict: judge.NeedsUpdate, Reason: "old.internal no longer resolves", Replacement: "Callers use new.internal:11434."}
+	h.judge.verdicts["A"] = judge.Verdict{Confidence: judge.High, Verdict: judge.NeedsUpdate, Reason: "old.internal no longer resolves", Replacement: "Callers use new.internal:11434.",
+		Edits: []judge.Edit{{Find: "old.internal", Replace: "new.internal"}}}
 
 	rep := h.run(t)
 	if rep.Memories != 2 || rep.Checkable != 1 || rep.Flagged != 1 || rep.Proposed != 1 || rep.OpenReviews != 1 {
@@ -229,6 +230,9 @@ func TestProposeThenApplyApprovedReplacement(t *testing.T) {
 	q := h.tasks.questions[p.TaskID]
 	if !q.Blocking || q.Recommendation != OptionApply || len(q.Answerers) != 1 {
 		t.Errorf("question = %+v", q)
+	}
+	if want := "Suggested action: supersede memory A in Wayminder with the proposed replacement. It makes these edits:\n- \"old.internal\" → \"new.internal\""; !strings.Contains(q.Question, want) {
+		t.Errorf("question lacks suggested action:\n%s", q.Question)
 	}
 	notes := h.tasks.messages[p.TaskID]
 	if len(notes) != 3 || !strings.Contains(notes[2].Body, "new.internal") {
@@ -269,6 +273,9 @@ func TestOwnWordingAndKeepAndForget(t *testing.T) {
 
 	if opts := h.tasks.questions[h.st.Proposals["C"].TaskID].Options; len(opts) != 2 || opts[0] != OptionForget {
 		t.Errorf("obsolete options = %v", opts)
+	}
+	if q := h.tasks.questions[h.st.Proposals["C"].TaskID].Question; !strings.Contains(q, "Suggested action: forget memory C in Wayminder.") {
+		t.Errorf("obsolete question lacks suggested action:\n%s", q)
 	}
 	h.tasks.answer(h.st.Proposals["A"].TaskID, "my own corrected text")
 	h.tasks.answer(h.st.Proposals["B"].TaskID, OptionKeep)
