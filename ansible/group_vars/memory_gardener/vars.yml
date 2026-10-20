@@ -42,4 +42,4 @@ memory_gardener_policy:
 # Built locally and copied to the host.
 memory_gardener_goos: linux
 memory_gardener_goarch: amd64
-memory_gardener_go_toolchain: go1.27.1
+memory_gardener_go_toolchain: go1.27.3
